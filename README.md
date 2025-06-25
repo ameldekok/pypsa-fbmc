@@ -48,10 +48,4 @@ It is also possible to choose another optimiser, but you will have to update the
 
 6. **Run the code:**
 
-You can now import and use the module in your Python scripts or Jupyter notebooks:
-
-```python
-from fbmc import run_fbmc_model
-```
-
-Make sure the working directory is set to the project root or that the `fbmc` module is discoverable via `PYTHONPATH`.
+You can now import and use the module in your Python scripts or Jupyter notebooks. For example, start with one of the jupyter notebooks.
