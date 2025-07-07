@@ -18,7 +18,7 @@ def determine_cnes(max_absolute_flow, line_capacity, line_usage_threshold) -> li
     """
     assert (0 < line_usage_threshold <= 1), 'Threshold is out of acceptable bounds: (0,1]'
     assert (max_absolute_flow.index == line_capacity.index).all(), 'Indices of max_absolute_flow and line_capacity do not match.'
-    assert (max_absolute_flow > 0).all(), 'Max absolute flow contains non-positive values.'
+    assert (max_absolute_flow >= 0).all(), 'Max absolute flow contains non-positive values.'
     assert (line_capacity > 0).all(), 'Line capacity contains non-positive values.'
 
     # TODO: Use data from a whole year to determine the critical network elements.
