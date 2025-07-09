@@ -23,9 +23,7 @@ from src.fbmc.parameters.gsk import (
     gsk_current_generation,
     get_uncertain_elements,
     initialize_gen_difference,
-    introduce_variation_to_network,
-    calculate_generation_difference,
-    process_generation_difference
+    introduce_variation_to_network
 )
 from src.fbmc.config import FBMCConfig
 
@@ -227,29 +225,6 @@ class TestGskIterativeUncertainty(unittest.TestCase):
                     original_gen_values.loc[self.network.snapshots[0], gen]
                 )
 
-    @patch('pypsa.Network.optimize')
-    def test_calculate_generation_difference(self, mock_optimize):
-        """Test calculation of generation differences after optimization."""
-        # Setup mock values for post-optimization
-        mock_optimize.side_effect = lambda **kwargs: setattr(
-            self.network.generators_t, 'p',
-            pd.DataFrame(
-                index=self.network.snapshots,
-                columns=self.network.generators.index,
-                data=[[60, 110, 140, 85, 135]]  # Different from initial values
-            )
-        )
-        
-        # Get the differences
-        diff = calculate_generation_difference(self.network)
-        
-        # Check dimensions
-        self.assertEqual(diff.shape, (5, 1))  # (generators, snapshots)
-        
-        # Check expected differences
-        expected_diffs = np.array([[10], [10], [-10], [10], [10]])  # Each generator change
-        self.assertTrue(np.array_equal(diff, expected_diffs))
-
     @patch('src.fbmc.parameters.gsk.silence_output')
     @patch('pypsa.Network.optimize')
     def test_gsk_iterative_uncertainty(self, mock_optimize, mock_silence):
@@ -276,7 +251,7 @@ class TestGskIterativeUncertainty(unittest.TestCase):
         result = gsk_iterative_uncertainty(
             self.network,
             uncertain_carriers=['offshore-wind', 'onshore-wind'],
-            num_iterations=3,
+            num_scenarios=3,
             gen_variation_std_dev=0.1,
             load_variation_std_dev=0.1
         )

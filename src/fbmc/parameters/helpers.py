@@ -57,6 +57,32 @@ def initialize_gen_difference(network: pypsa.Network, num_iterations: int) -> xr
         },
     )
 
+def initialize_nodal_injection_difference(network: pypsa.Network, num_iterations: int) -> xr.DataArray:
+    """
+    Initialize the nodal injection difference array.
+
+    Parameters
+    ----------
+    network : pypsa.Network
+        The PyPSA network object.
+    num_iterations : int
+        Number of iterations for stochastic sampling.
+
+    Returns
+    -------
+    xr.DataArray
+        An xarray DataArray to store nodal injection differences.
+    """
+    return xr.DataArray(
+        np.zeros((num_iterations, len(network.buses.index), len(network.snapshots))),
+        dims=["iteration", "Bus", "snapshot"],
+        coords={
+            "iteration": range(num_iterations),
+            "Bus": network.buses.index,
+            "snapshot": network.snapshots,
+        },
+    )
+
 def introduce_variation_to_network(
     network: pypsa.Network, 
     uncertain_gens: pd.DataFrame, 
@@ -159,12 +185,35 @@ def introduce_variation_to_network(
         except Exception as e:
             raise RuntimeError(f"Error applying load uncertainty: {e}")
 
-def calculate_generation_difference(network: pypsa.Network) -> np.ndarray:
+def silent_run_opf(network: pypsa.Network) -> None:
     """
-    Calculate the difference in generation after optimization.
+    Run the optimal power flow (OPF) optimization silently.
+
+    This function uses the silence_output context manager to suppress all output
+    during the optimization process.
+
+    Parameters
+    ----------
+    network : pypsa.Network
+        The PyPSA network object to optimize.
     
+    Raises
+    ------
+    RuntimeError
+        If optimization fails.
+    """
+    try:
+        with silence_output():
+            network.optimize(solver_name="gurobi", solver_options={"OutputFlag": 0})
+    except Exception as e:
+        raise RuntimeError(f"Network optimization failed: {e}")
+
+def calculate_nodal_injection_difference(network: pypsa.Network) -> np.ndarray:
+    """
+    Calculate the difference in nodal injections after optimization.
+
     This function:
-    1. Stores the current generator values
+    1. Stores the current nodal injections
     2. Optimizes the network
     3. Calculates the difference before and after optimization
 
@@ -176,26 +225,26 @@ def calculate_generation_difference(network: pypsa.Network) -> np.ndarray:
     Returns
     -------
     np.ndarray
-        A NumPy array containing the generation differences.
-        Shape: (n_generators, n_snapshots)
-        
+        A NumPy array containing the nodal injection differences.
+        Shape: (n_buses, n_snapshots)
+
     Raises
     ------
     RuntimeError
         If optimization fails.
     """
-    # Store generator values before optimization
-    gen_t_before_optimization = network.generators_t.p.copy()
-    
+    # Store nodal injections before optimization
+    nodal_injections_before_optimization = network.buses_t.p.copy()
+
     try:
         # Run optimization silently using the silence_output context manager
         with silence_output():
             network.optimize(solver_name="gurobi", solver_options={"OutputFlag": 0})
     except Exception as e:
         raise RuntimeError(f"Network optimization failed: {e}")
-    
-    # Calculate generation differences (transpose to match expected dimensions)
-    return (network.generators_t.p - gen_t_before_optimization).values.T
+
+    # Calculate nodal injection differences (transpose to match expected dimensions)
+    return (network.buses_t.p - nodal_injections_before_optimization).values.T
 
 def process_generation_difference(gen_difference, network):
     """
@@ -333,6 +382,94 @@ def process_generation_difference(gen_difference, network):
         gsk_matrices[snapshot] = gsk_matrix
     
     return gsk_matrices
+
+import numpy as np
+import pandas as pd
+
+def process_nodal_difference(nodal_diff, network):
+    """
+    Process nodal injection differences and calculate the GSK per bus.
+
+    Parameters
+    ----------
+    nodal_diff : xr.DataArray
+        Nodal injection changes for all iterations.
+        Dimensions: (iteration, bus, snapshot)
+    network : pypsa.Network
+        The PyPSA network object, with each bus carrying a 'zone_name' attribute.
+
+    Returns
+    -------
+    dict of pd.DataFrame
+        A dictionary keyed by snapshot, each value a DataFrame of shape
+        (zones × buses) containing the averaged GSKs.
+    """
+    # 1) Sanity check
+    if np.isnan(nodal_diff.values).any():
+        raise ValueError("Nodal differences contain NaNs.")
+    
+    # 2) Extract mappings and index lists
+    bus_zones   = network.buses["zone_name"].to_dict()  # bus -> zone
+    all_buses   = list(network.buses.index)
+    all_zones   = sorted(network.buses["zone_name"].unique())
+    all_snaps   = list(nodal_diff.coords["snapshot"].values)
+    n_iters     = nodal_diff.sizes["iteration"]
+
+    # 3) Prepare output container
+    gsk_per_snapshot = {}
+
+    # 4) Loop over snapshots
+    for si, snap in enumerate(all_snaps):
+        # init accumulator: zone × bus
+        accum = {zone: {b: 0.0 for b in all_buses} for zone in all_zones}
+        
+        # 5) Loop over iterations
+        for it in range(n_iters):
+            # get 1d array of diffs for this iteration & snapshot
+            diffs = nodal_diff.isel(iteration=it, snapshot=si).values
+            # build DataFrame: bus index, zone, diff
+            df = pd.DataFrame({
+                "bus": all_buses,
+                "diff": diffs
+            })
+            df["zone"] = df["bus"].map(bus_zones)
+
+            # compute zonal sums
+            zonal_sum = df.groupby("zone")["diff"].sum()
+
+            # compute per-bus GSK this iteration
+            def compute_gsk(row):
+                zsum = zonal_sum.loc[row["zone"]]
+                if abs(zsum) > 1e-8:
+                    return row["diff"] / zsum
+                else:
+                    # uniform if zone net change ≈ 0
+                    buses_in_z = df.loc[df["zone"] == row["zone"], "bus"]
+                    return 1.0 / len(buses_in_z)
+
+            df["gsk_it"] = df.apply(compute_gsk, axis=1)
+
+            # accumulate
+            for _, row in df.iterrows():
+                accum[row["zone"]][row["bus"]] += row["gsk_it"]
+
+        # 6) average over iterations and normalize
+        mat = pd.DataFrame(0.0, index=all_zones, columns=all_buses)
+        for zone in all_zones:
+            for bus in all_buses:
+                mat.at[zone, bus] = accum[zone][bus] / n_iters
+
+            # normalize row to sum to 1 (or uniform if zero)
+            row_sum = mat.loc[zone].sum()
+            if row_sum > 1e-8:
+                mat.loc[zone] /= row_sum
+            else:
+                buses = [b for b, z in bus_zones.items() if z == zone]
+                mat.loc[zone, buses] = 1.0 / len(buses)
+
+        gsk_per_snapshot[snap] = mat
+
+    return gsk_per_snapshot
 
 @contextlib.contextmanager
 def silence_output():

@@ -8,10 +8,12 @@ from ..config import FBMCConfig
 from .helpers import (
     get_uncertain_elements, 
     initialize_gen_difference,
+    initialize_nodal_injection_difference,
     introduce_variation_to_network,
-    calculate_generation_difference,
     process_generation_difference,
-    silence_output
+    process_nodal_difference,
+    silence_output,
+    silent_run_opf
 )
 
 def calculate_gsk(network: pypsa.Network, 
@@ -56,7 +58,7 @@ def calculate_gsk(network: pypsa.Network,
         return gsk_iterative_uncertainty(
             network,
             uncertain_carriers=config.uncertain_carriers,
-            num_iterations=config.num_scenarios,
+            num_scenarios=config.num_scenarios,
             gen_variation_std_dev=config.gen_variation_std_dev,
             load_variation_std_dev=config.load_variation_std_dev,
         )
@@ -80,7 +82,7 @@ def calculate_gsk(network: pypsa.Network,
 def gsk_iterative_uncertainty(
     network: pypsa.Network,
     uncertain_carriers: List[str] = ['offshore-wind', 'onshore-wind'],
-    num_iterations: int = 10,
+    num_scenarios: int = 10,
     gen_variation_std_dev: float = 0.1,
     load_variation_std_dev: float = 0.1
 ) -> Dict[pd.Timestamp, pd.DataFrame]:
@@ -112,7 +114,7 @@ def gsk_iterative_uncertainty(
         Dictionary of DataFrames containing GSK values for each bus and zone, one per snapshot
     """
     # Validate inputs
-    if num_iterations < 1:
+    if num_scenarios < 1:
         raise ValueError("Number of iterations must be at least 1")
     if gen_variation_std_dev < 0 or load_variation_std_dev < 0:
         raise ValueError("Standard deviations must be non-negative")
@@ -127,14 +129,17 @@ def gsk_iterative_uncertainty(
     # Collect the loads and gens (wind) with uncertainty
     uncertain_gens, uncertain_loads = get_uncertain_elements(network, uncertain_carriers)
     
-    # Initialize the generation difference array
-    gen_difference = initialize_gen_difference(network, num_iterations)
+    # Initialize the nodal injections difference array
+    nodal_injections_difference = initialize_nodal_injection_difference(network, num_scenarios)
+
+    # Save the original nodal injections
+    original_nodal_injections = network.buses_t.p.copy()
 
     # Perform stochastic sampling
-    for i in range(num_iterations):
+    for i in range(num_scenarios):
         # Create a fresh copy for this iteration
         stochastic_network = network.copy(snapshots=network.snapshots)
-        
+
         # Apply uncertainty to generators and loads
         introduce_variation_to_network(
             stochastic_network,
@@ -144,11 +149,14 @@ def gsk_iterative_uncertainty(
             load_variation_std_dev,
         )
 
-        # Calculate generation differences after optimization
-        gen_difference[i,:,:] = calculate_generation_difference(stochastic_network)
-        
+        silent_run_opf(stochastic_network)
+        nodal_injections_difference[i,:,:] = (stochastic_network.buses_t.p - original_nodal_injections).values.T
+
+    # Calculate the GSK based on the nodal injections difference
+    processed_nodal_difference = process_nodal_difference(nodal_injections_difference, network)
+
     # Process results and calculate GSK
-    return process_generation_difference(gen_difference, network)
+    return processed_nodal_difference
 
 def gsk_iterative_fbmc(
     network: pypsa.Network,
