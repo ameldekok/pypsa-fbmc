@@ -7,11 +7,9 @@ from typing import List, Dict, Tuple, Union, Optional
 from ..config import FBMCConfig
 from .helpers import (
     get_uncertain_elements, 
-    initialize_gen_difference,
     initialize_nodal_injection_difference,
     introduce_variation_to_network,
-    process_generation_difference,
-    process_nodal_difference,
+    calculate_gsk_per_bus,
     silence_output,
     silent_run_opf
 )
@@ -153,7 +151,7 @@ def gsk_iterative_uncertainty(
         nodal_injections_difference[i,:,:] = (stochastic_network.buses_t.p - original_nodal_injections).values.T
 
     # Calculate the GSK based on the nodal injections difference
-    processed_nodal_difference = process_nodal_difference(nodal_injections_difference, network)
+    processed_nodal_difference = calculate_gsk_per_bus(nodal_injections_difference, network)
 
     # Process results and calculate GSK
     return processed_nodal_difference
@@ -224,8 +222,10 @@ def gsk_iterative_fbmc(
         # Collect uncertain elements
         uncertain_gens, uncertain_loads = get_uncertain_elements(network, uncertain_carriers)
         
-        # Initialize storage for generation differences in this GSK iteration
-        gen_difference_data = initialize_gen_difference(network, num_iterations)
+        # Initialize storage for nodal injection differences in this GSK iteration
+        nodal_difference_data = initialize_nodal_injection_difference(network, num_iterations)
+
+        original_nodal_injections = network.buses_t.p.copy()
         
         # Monte Carlo iterations using current GSK
         for i in range(num_iterations):
@@ -241,14 +241,12 @@ def gsk_iterative_fbmc(
                 load_variation_std_dev
             )
             
-            # Run FBMC with current GSK to get generation allocation
-            fbmc_results = _run_fbmc_with_gsk(perturbed_network, current_gsk, config)
-            
-            # Calculate generation differences from the FBMC results
-            gen_difference_data[i,:,:] = _calculate_fbmc_gen_difference(network, fbmc_results)
-            
+            # Run FBMC with current GSK to get nodal difference
+            fbmc_nodal_difference_result = _run_fbmc_with_gsk(perturbed_network, current_gsk, config)
+            nodal_difference_data[i,:,:] = (fbmc_nodal_difference_result - original_nodal_injections).values.T
+           
         # Calculate new GSK from Monte Carlo results
-        new_gsk = process_generation_difference(gen_difference_data, network)
+        new_gsk = calculate_gsk_per_bus(nodal_difference_data, network)
         
         # Check for convergence
         if _check_gsk_convergence(new_gsk, current_gsk):
@@ -345,18 +343,28 @@ def _run_fbmc_with_gsk(
             # Clean up the MultiIndex columns
             opt_gens_df.columns = opt_gens_df.columns.droplevel(0)
             
-            # Return the generation allocation results
-            results = {
-                'generators_t': {
-                    'p': opt_gens_df
-                }
-            }
-            return results
+            opt_loads_df = zonal_network.loads_t.p.copy()
+
+            # Sum generator outputs by bus
+            gen_inj = opt_gens_df.groupby(perturbed_network.generators.bus, axis=1).sum()
+            
+            # Sum loads by bus (loads consumed are negative injections)
+            load_inj = opt_loads_df.groupby(perturbed_network.loads.bus, axis=1).sum()
+            
+            # Align to all buses
+            buses = perturbed_network.buses.index
+            gen_inj = gen_inj.reindex(columns=buses, fill_value=0.0)
+            load_inj = load_inj.reindex(columns=buses, fill_value=0.0)
+            
+            # Net injection: generation minus load
+            nodal_inj = gen_inj - load_inj
+
+            return nodal_inj
         else:
             print("Warning: Optimization model solution not found, using direct network values")
             return {
                 'generators_t': {
-                    'p': zonal_network.generators_t.p.copy()
+                    'p': zonal_network.buses_t.p.copy()
                 }
             }
         
@@ -368,19 +376,6 @@ def _run_fbmc_with_gsk(
                 'p': perturbed_network.generators_t.p.copy()
             }
         }
-
-def _calculate_fbmc_gen_difference(
-    original_network: pypsa.Network,
-    fbmc_results: Dict
-) -> np.ndarray:
-    """Calculate generation differences between original and FBMC results."""
-    # Extract generation from FBMC results
-    fbmc_gen = fbmc_results['generators_t']['p']
-    
-    # Calculate difference with original generation
-    difference = (fbmc_gen - original_network.generators_t.p).values.T
-    
-    return difference
 
 def _check_gsk_convergence(
     new_gsk: Dict[pd.Timestamp, pd.DataFrame],

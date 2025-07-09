@@ -246,147 +246,11 @@ def calculate_nodal_injection_difference(network: pypsa.Network) -> np.ndarray:
     # Calculate nodal injection differences (transpose to match expected dimensions)
     return (network.buses_t.p - nodal_injections_before_optimization).values.T
 
-def process_generation_difference(gen_difference, network):
-    """
-    Process the generation differences and calculate the GSK.
-    
-    This function:
-    1. Checks for NaN values in the generation differences
-    2. Calculates GSK values per iteration as fraction of zonal change
-    3. Takes the mean of these fractions across iterations
-    4. Maps generators to their respective zones and buses
-    5. Aggregates GSK values by bus for final output
-    
-    Parameters
-    ----------
-    gen_difference : xr.DataArray
-        An xarray DataArray containing generation differences for all iterations.
-        Dimensions: (iteration, Generator, snapshot)
-    network : pypsa.Network
-        The PyPSA network object with buses and their zone mapping.
-        
-    Returns
-    -------
-    pd.DataFrame or dict of pd.DataFrame
-        If using the iterative uncertainty method, returns a dictionary of DataFrames
-        with snapshots as keys, each DataFrame containing the GSKs for each bus-zone pair.
-        If using static GSK method, returns a single DataFrame with zones as rows and buses as columns.
-    
-    Raises
-    ------
-    ValueError
-        If the generation differences contain NaN values or if zone mapping fails.
-    """
-    # Check for NaN values which would indicate problems in the optimization
-    if np.isnan(gen_difference).any():
-        raise ValueError("Generation differences contain NaN values. Check optimization results.")
-    
-    # Create mapping from generators to zones and buses
-    try:
-        bus_to_zone = network.buses["zone_name"].to_dict()
-        gen_to_bus = network.generators["bus"].to_dict()
-        
-        # Create mappings from generator to zone and bus
-        gen_to_zone = {gen: bus_to_zone.get(gen_to_bus.get(gen)) 
-                      for gen in network.generators.index}
-        
-        gen_to_bus = {gen: gen_to_bus.get(gen) for gen in network.generators.index}
-    except KeyError as e:
-        raise ValueError(f"Failed to map generators to zones or buses: {e}")
-    
-    # Get all unique zones, buses, and snapshots for consistent dimensions
-    all_zones = sorted(network.buses["zone_name"].unique())
-    all_buses = sorted(network.buses.index)
-    all_snapshots = sorted(network.snapshots)
-    
-    # Create a mapping from bus to zone for all buses
-    bus_zone_mapping = network.buses["zone_name"].to_dict()
-    
-    # Create a dictionary to store GSK matrices for each snapshot
-    gsk_matrices = {}
-    
-    # Process each snapshot separately
-    for s, snapshot in enumerate(all_snapshots):
-        # Initialize an empty GSK matrix for this snapshot
-        gsk_matrix = pd.DataFrame(0.0, index=all_zones, columns=all_buses)
-        
-        # For each iteration, calculate the GSK values and then average them
-        iteration_gsks = []
-        
-        for i in range(gen_difference.shape[0]):  # Iterate through iterations
-            # Extract the generation differences for this iteration and snapshot
-            iter_gen_diff = gen_difference[i, :, s].values
-            
-            # Create a DataFrame with generator differences for this iteration
-            iter_df = pd.DataFrame({
-                'Generator': network.generators.index,
-                'gen_dif': iter_gen_diff,
-                'zone': [gen_to_zone.get(gen) for gen in network.generators.index],
-                'bus': [gen_to_bus.get(gen) for gen in network.generators.index]
-            })
-            
-            # Drop generators that couldn't be mapped to a zone (should be none if mapping is correct)
-            iter_df = iter_df.dropna(subset=['zone', 'bus'])
-            
-            # Calculate zonal sum and count for each zone
-            zonal_sums = iter_df.groupby('zone')['gen_dif'].sum().to_dict()
-            zonal_counts = iter_df.groupby('zone').size().to_dict()
-            
-            # Calculate GSK for each generator in this iteration
-            for _, row in iter_df.iterrows():
-                zone = row['zone']
-                bus = row['bus']
-                zonal_sum = zonal_sums[zone]
-                
-                # Calculate GSK: if zonal sum is non-zero, use ratio; otherwise use equal distribution
-                if abs(zonal_sum) > 1e-6:  # Using a small threshold to avoid division by very small numbers
-                    gsk_value = row['gen_dif'] / zonal_sum
-                else:
-                    # If sum is nearly zero, distribute equally among generators in the zone
-                    gsk_value = 1.0 / zonal_counts[zone]
-                
-                # Store GSK value keyed by (zone, bus) for this iteration
-                iter_df.loc[iter_df['Generator'] == row['Generator'], 'gsk'] = gsk_value
-            
-            # Add this iteration's GSK values to our collection
-            iteration_gsks.append(iter_df)
-        
-        # Combine all iterations into one DataFrame
-        all_iter_df = pd.concat(iteration_gsks, ignore_index=True)
-        
-        # Group by zone and bus, and calculate mean GSK across iterations
-        mean_gsks = all_iter_df.groupby(['zone', 'bus'])['gsk'].mean().reset_index()
-        
-        # Fill the GSK matrix with the mean values
-        for _, row in mean_gsks.iterrows():
-            zone = row['zone']
-            bus = row['bus']
-            gsk_value = row['gsk']
-            
-            if pd.notna(zone) and pd.notna(bus):
-                gsk_matrix.at[zone, bus] = gsk_value
-        
-        # Normalize GSK values to ensure each zone's GSKs sum to 1
-        # This handles any numerical issues from averaging
-        for zone in all_zones:
-            zone_sum = gsk_matrix.loc[zone].sum()
-            if zone_sum > 0:
-                gsk_matrix.loc[zone] = gsk_matrix.loc[zone] / zone_sum
-            else:
-                # If no GSK values for this zone, distribute equally among its buses
-                zone_buses = [bus for bus, bus_zone in bus_zone_mapping.items() if bus_zone == zone]
-                if zone_buses:
-                    gsk_matrix.loc[zone, zone_buses] = 1.0 / len(zone_buses)
-        
-        # Store the GSK matrix for this snapshot
-        gsk_matrices[snapshot] = gsk_matrix
-    
-    return gsk_matrices
-
 import numpy as np
 import pandas as pd
 
-def process_nodal_difference(nodal_diff, network):
+
+def calculate_gsk_per_bus(nodal_diff, network):
     """
     Process nodal injection differences and calculate the GSK per bus.
 
@@ -409,67 +273,63 @@ def process_nodal_difference(nodal_diff, network):
         raise ValueError("Nodal differences contain NaNs.")
     
     # 2) Extract mappings and index lists
-    bus_zones   = network.buses["zone_name"].to_dict()  # bus -> zone
-    all_buses   = list(network.buses.index)
-    all_zones   = sorted(network.buses["zone_name"].unique())
-    all_snaps   = list(nodal_diff.coords["snapshot"].values)
-    n_iters     = nodal_diff.sizes["iteration"]
+    bus_zones = network.buses["zone_name"].to_dict()
+    all_buses = list(network.buses.index)
+    all_zones = sorted(network.buses["zone_name"].unique())
+    all_snaps = list(nodal_diff.coords["snapshot"].values)
+    n_iters   = nodal_diff.sizes["iteration"]
 
     # 3) Prepare output container
     gsk_per_snapshot = {}
 
     # 4) Loop over snapshots
     for si, snap in enumerate(all_snaps):
-        # init accumulator: zone × bus
-        accum = {zone: {b: 0.0 for b in all_buses} for zone in all_zones}
+        # accumulators per zone×bus and valid‐count per zone
+        accum = {z: {b: 0.0 for b in all_buses} for z in all_zones}
+        valid_iters = {z: 0 for z in all_zones}
         
         # 5) Loop over iterations
         for it in range(n_iters):
-            # get 1d array of diffs for this iteration & snapshot
             diffs = nodal_diff.isel(iteration=it, snapshot=si).values
-            # build DataFrame: bus index, zone, diff
-            df = pd.DataFrame({
-                "bus": all_buses,
-                "diff": diffs
-            })
+            df = pd.DataFrame({"bus": all_buses, "diff": diffs})
             df["zone"] = df["bus"].map(bus_zones)
 
-            # compute zonal sums
             zonal_sum = df.groupby("zone")["diff"].sum()
 
-            # compute per-bus GSK this iteration
-            def compute_gsk(row):
-                zsum = zonal_sum.loc[row["zone"]]
-                if abs(zsum) > 1e-8:
-                    return row["diff"] / zsum
-                else:
-                    # uniform if zone net change ≈ 0
-                    buses_in_z = df.loc[df["zone"] == row["zone"], "bus"]
-                    return 1.0 / len(buses_in_z)
+            # skip zones with zero net change
+            nonzero_zones = [z for z, s in zonal_sum.items() if abs(s) > 1e-8]
+            if not nonzero_zones:
+                continue
 
-            df["gsk_it"] = df.apply(compute_gsk, axis=1)
-
-            # accumulate
-            for _, row in df.iterrows():
-                accum[row["zone"]][row["bus"]] += row["gsk_it"]
-
-        # 6) average over iterations and normalize
+            # compute per-bus GSK for non-zero zones
+            for z in nonzero_zones:
+                zsum = zonal_sum[z]
+                subset = df[df["zone"] == z]
+                for _, row in subset.iterrows():
+                    accum[z][row["bus"]] += row["diff"] / zsum
+                valid_iters[z] += 1
+        
+        # 6) average over *valid* iterations and normalize
         mat = pd.DataFrame(0.0, index=all_zones, columns=all_buses)
-        for zone in all_zones:
-            for bus in all_buses:
-                mat.at[zone, bus] = accum[zone][bus] / n_iters
-
-            # normalize row to sum to 1 (or uniform if zero)
-            row_sum = mat.loc[zone].sum()
-            if row_sum > 1e-8:
-                mat.loc[zone] /= row_sum
+        for z in all_zones:
+            if valid_iters[z] > 0:
+                for b in all_buses:
+                    mat.at[z, b] = accum[z][b] / valid_iters[z]
             else:
-                buses = [b for b, z in bus_zones.items() if z == zone]
-                mat.loc[zone, buses] = 1.0 / len(buses)
+                # no valid iteration → uniform
+                buses_in_z = [b for b, zz in bus_zones.items() if zz == z]
+                for b in buses_in_z:
+                    mat.at[z, b] = 1.0 / len(buses_in_z)
+
+            # finally renormalize row to sum to 1 exactly
+            row_sum = mat.loc[z].sum()
+            if row_sum > 1e-8:
+                mat.loc[z] /= row_sum
 
         gsk_per_snapshot[snap] = mat
 
     return gsk_per_snapshot
+
 
 @contextlib.contextmanager
 def silence_output():
