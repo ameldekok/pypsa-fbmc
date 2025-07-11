@@ -49,18 +49,13 @@ def get_net_positions(buses: pd.DataFrame, buses_t: pd.DataFrame, zones: pd.Inde
             
     return net_positions
 
-def calculate_reference_flow(base_flows: pd.DataFrame, 
-                           zonal_ptdf: pd.DataFrame,
-                           zonal_net_positions: pd.DataFrame) -> pd.DataFrame:
-    """Calculate reference flows using base flows, PTDF and net positions."""
-    # Align base flows with zonal PTDF indices
-    base_flows_aligned = base_flows.loc[zonal_ptdf.index]
-    return base_flows_aligned - zonal_ptdf.dot(zonal_net_positions.T)
 
 def calculate_ram(network: pypsa.Network,
                  zonal_ptdf: pd.DataFrame,
                  min_ram: float = 0.0,
-                 reliability_margin_factor: float = 0.1) -> pd.DataFrame:
+                 reliability_margin_factor: float = 0.1,
+                 add_zptdf_np_term: bool = True,
+                 ) -> pd.DataFrame:
     """
     Calculate the Remaining Available Margin (RAM) for a given power network.
     
@@ -86,14 +81,18 @@ def calculate_ram(network: pypsa.Network,
     frm = calculate_flow_reliability_margin(branch_capacity, 
                                           reliability_margin_factor=reliability_margin_factor)
     net_positions = get_net_positions(network.buses, network.buses_t, zonal_ptdf.columns)
-    f_reference = calculate_reference_flow(base_flows, zonal_ptdf, net_positions)
-    
+
     # Calculate final RAM values
     partial_ram = branch_capacity - frm
     partial_ram = partial_ram.loc[zonal_ptdf.index]
-    ram = pd.DataFrame(partial_ram.to_numpy().reshape(-1,1) - f_reference.to_numpy(),
-                      index=zonal_ptdf.index, 
-                      columns=f_reference.columns)
+
+    ram_np = partial_ram.to_numpy().reshape(-1,1) - base_flows.loc[zonal_ptdf.index].to_numpy() 
+    if add_zptdf_np_term:
+        ram_np += zonal_ptdf.dot(net_positions.T)
+
+    ram = pd.DataFrame(ram_np,
+                      index=partial_ram.index, 
+                      columns=partial_ram.columns)
     
     if min_ram > 0:
         ram = ram.clip(lower=min_ram*branch_capacity)
