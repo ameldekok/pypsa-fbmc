@@ -18,7 +18,7 @@ class FBMCConfig:
     gsk_method: str = "ITERATIVE_UNCERTAINTY"  
     
     # Uncertainty-based GSK parameters
-    uncertain_carriers: List[str] = ("offshore-wind", "onshore-wind")
+    uncertain_carriers: tuple[str] = ("offshore-wind", "onshore-wind")
     num_scenarios: int = 100
     gen_variation_std_dev: float = 0.1
     load_variation_std_dev: float = 0.1

@@ -4,14 +4,14 @@ Functions for converting between nodal and zonal network representations.
 
 import pandas as pd
 import pypsa
-from typing import List, Optional
+from typing import Optional
 
 from src.fbmc.parameters.helpers import silence_output
 
 
 def nodal_to_zonal(
     nodal_network: pypsa.Network,
-    snapshots: Optional[List] = None,
+    snapshots: Optional[list[pd.Index]] = None,
     zone_column: str = 'zone_name',
     bidirectional_links: bool = True
 ) -> pypsa.Network:

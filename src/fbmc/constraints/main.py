@@ -31,7 +31,7 @@ def create_zonal_generation(network: pypsa.Network):
 
     return network
 
-def add_fbmc_constraints(network, zPTDF_df, RAM_df):
+def add_fbmc_constraints(network: pypsa.Network, zPTDF_df, RAM_df):
     """
     Main function to add FBMC constraints to the network.
     

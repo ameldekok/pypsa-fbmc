@@ -73,6 +73,10 @@ def calculate_ram(network: pypsa.Network,
     Returns:
         DataFrame containing RAM values for each branch
     """
+    if network.transformers.index.isin(network.lines.index).any():
+        raise ValueError("Transformers and lines cannot have the same names")
+    if not network.links.isempty:
+        raise Warning("Links are not fully supported.")
     # Get base state
     base_flows = get_base_flows(network)
     branch_capacity = network.branches().s_nom
