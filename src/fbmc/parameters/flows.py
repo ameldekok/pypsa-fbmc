@@ -75,7 +75,7 @@ def calculate_ram(network: pypsa.Network,
     """
     if network.transformers.index.isin(network.lines.index).any():
         raise ValueError("Transformers and lines cannot have the same names")
-    if not network.links.isempty:
+    if not network.links.empty:
         raise Warning("Links are not fully supported.")
     # Get base state
     base_flows = get_base_flows(network)
