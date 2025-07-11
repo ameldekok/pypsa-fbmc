@@ -84,11 +84,9 @@ def calculate_ram(network: pypsa.Network,
     # Optionally add the zonal PTDF term
     if add_zptdf_np_term:
         zptdf_term = zonal_ptdf @ net_positions.T  # matrix multiplication with pandas
+        ram = ram.add(zptdf_term)
 
-    ram = pd.DataFrame(ram_np,
-                      index=partial_ram.index, 
-                      columns=partial_ram.columns)
-    
+
     if min_ram > 0:
         ram = ram.clip(lower=min_ram*branch_capacity)
         
