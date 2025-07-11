@@ -40,14 +40,7 @@ def get_net_positions(buses: pd.DataFrame, buses_t: pd.DataFrame, zones: pd.Inde
     Returns:
         DataFrame with net positions per zone
     """
-    net_positions = pd.DataFrame(0.0, index=buses_t.p.index, columns=zones)
-    
-    for bus in buses_t.p.columns:
-        zone = buses.loc[bus, 'zone_name']
-        if zone in net_positions.columns:
-            net_positions.loc[:, zone] += buses_t.p[bus]
-            
-    return net_positions
+    return buses_t.p.T.groupby(buses['zone_name']).sum().T.reindex(columns=zones, fill_value=0.0)
 
 
 def calculate_ram(network: pypsa.Network,
@@ -86,9 +79,11 @@ def calculate_ram(network: pypsa.Network,
     partial_ram = branch_capacity - frm
     partial_ram = partial_ram.loc[zonal_ptdf.index]
 
-    ram_np = partial_ram.to_numpy().reshape(-1,1) - base_flows.loc[zonal_ptdf.index].to_numpy() 
+
+    ram = (partial_ram - base_flows.loc[zonal_ptdf.index].T).T
+    # Optionally add the zonal PTDF term
     if add_zptdf_np_term:
-        ram_np += zonal_ptdf.dot(net_positions.T)
+        zptdf_term = zonal_ptdf @ net_positions.T  # matrix multiplication with pandas
 
     ram = pd.DataFrame(ram_np,
                       index=partial_ram.index, 
