@@ -61,7 +61,7 @@ def add_fbmc_constraints(network: pypsa.Network, zPTDF_df, RAM_df):
     load_zone_mapping = create_load_zone_mapping(network.loads)
     zones = network.buses.index.to_list()
     load_zone_mask = create_load_zone_mask(load_zone_mapping, zones)
-    zonal_loads = get_zonal_loads(load_zone_mask, network.loads_t.p_set)
+    zonal_loads = get_zonal_loads(load_zone_mask, network.get_switchable_as_dense("Load", "p_set"))
 
     # Restrict the load on CNEs by the Remaining Available Margin (RAM)
     cne_constraint = construct_cne_constraint(zPTDF_xr, zonal_generation, zonal_loads, RAM_xr)
