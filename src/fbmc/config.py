@@ -1,7 +1,15 @@
 """FBMC configuration parameters."""
 
 from dataclasses import dataclass
-from typing import List
+import enum
+
+class GSKMethod(enum.Enum):
+    """Tracks implemented GSK methods."""
+    ADJUSTABLE_CAP: str = "ADJUSTABLE_CAP"
+    CURRENT_GENERATION: str = "CURRENT_GENERATION"
+    ITERATIVE_UNCERTAINTY: str = "ITERATIVE_UNCERTAINTY"
+    ITERATIVE_FBMC: str = "ITERATIVE_FBMC"
+    MERIT_ORDER: str = "MERIT_ORDER"
 
 @dataclass
 class FBMCConfig:
@@ -15,7 +23,11 @@ class FBMCConfig:
     # "CURRENT_GENERATION" - Current Generation
     # "ITERATIVE_UNCERTAINTY" - Iterative Uncertainty
     # "ITERATIVE_FBMC" - Iterative FBMC
-    gsk_method: str = "ITERATIVE_UNCERTAINTY"  
+    
+    # use the GSKMethod class 
+    gsk_method: str = GSKMethod.ADJUSTABLE_CAP
+    # gsk_method: str = "ADJUSTABLE_CAP"
+    # gsk_method = GSKMethod(gsk_method)
     
     # Uncertainty-based GSK parameters
     uncertain_carriers: tuple[str] = ("offshore-wind", "onshore-wind")
@@ -25,4 +37,4 @@ class FBMCConfig:
 
     # Iterative GSK parameters
     max_gsk_iterations: int = 5
-    initial_gsk_method: str = "CURRENT_GENERATION"
+    initial_gsk_method: str = GSKMethod.CURRENT_GENERATION

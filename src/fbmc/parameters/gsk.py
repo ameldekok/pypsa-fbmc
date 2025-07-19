@@ -3,8 +3,7 @@ import pandas as pd
 import pypsa
 from typing import List, Dict, Tuple, Union, Optional
 
-
-from ..config import FBMCConfig
+from ..config import FBMCConfig, GSKMethod
 from .helpers import (
     get_uncertain_elements, 
     initialize_gen_difference,
@@ -50,9 +49,9 @@ def calculate_gsk(network: pypsa.Network,
         raise ValueError("Buses in network must have 'zone_name' attribute for GSK calculation.")
 
     # Select method based on config
-    if config.gsk_method == "ADJUSTABLE_CAP":
+    if config.gsk_method == GSKMethod.ADJUSTABLE_CAP:
         return gsk_adjustable_cap(network.generators, network.buses)
-    elif config.gsk_method == "ITERATIVE_UNCERTAINTY":
+    elif config.gsk_method == GSKMethod.ITERATIVE_UNCERTAINTY:
         return gsk_iterative_uncertainty(
             network,
             uncertain_carriers=config.uncertain_carriers,
@@ -60,9 +59,9 @@ def calculate_gsk(network: pypsa.Network,
             gen_variation_std_dev=config.gen_variation_std_dev,
             load_variation_std_dev=config.load_variation_std_dev,
         )
-    elif config.gsk_method == "CURRENT_GENERATION":
+    elif config.gsk_method == GSKMethod.CURRENT_GENERATION:
         return gsk_current_generation(network.generators, network.generators_t.p, network.buses)
-    elif config.gsk_method == "ITERATIVE_FBMC":
+    elif config.gsk_method == GSKMethod.ITERATIVE_FBMC:
         return gsk_iterative_fbmc(
             network,
             config=config,
@@ -73,8 +72,10 @@ def calculate_gsk(network: pypsa.Network,
             load_variation_std_dev=config.load_variation_std_dev,
             initial_gsk_method=config.initial_gsk_method,
         )
+    elif config.gsk_method == GSKMethod.MERIT_ORDER:
+        return calc_merit_order_based_gsk(network, standard_deviation=config.gsk_std_dev)
     else:
-        raise ValueError(f"Unknown method: {config.gsk_method}. Supported methods are: 'ADJUSTABLE_CAP', 'ITERATIVE_UNCERTAINTY', 'CURRENT_GENERATION', 'ITERATIVE_FBMC'.")
+        raise ValueError(f"Unknown method: {config.gsk_method}. Supported methods are: 'MERIT_ORDER','ADJUSTABLE_CAP', 'ITERATIVE_UNCERTAINTY', 'CURRENT_GENERATION', 'ITERATIVE_FBMC'.")
     
 
 def gsk_iterative_uncertainty(
@@ -344,10 +345,9 @@ def _get_initial_gsk(network: pypsa.Network, method: str) -> Dict[pd.Timestamp, 
     """Get initial GSK using specified method."""
 
     print(f"Calculating initial GSK using {method} method")
-    
-    if method == "CURRENT_GENERATION":
+    if method == GSKMethod.CURRENT_GENERATION:
         return gsk_current_generation(network.generators, network.generators_t.p, network.buses)
-    elif method == "ADJUSTABLE_CAP":
+    elif method == GSKMethod.ADJUSTABLE_CAP:
         gsk = gsk_adjustable_cap(network.generators, network.buses)
         # Convert to dict format for consistency
         return {ts: gsk.copy() for ts in network.snapshots}
