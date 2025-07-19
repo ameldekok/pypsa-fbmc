@@ -474,7 +474,11 @@ def _check_gsk_convergence(
     return True
 
 
-def gsk_adjustable_cap(generators: pd.DataFrame, buses: pd.DataFrame) -> pd.DataFrame:
+def gsk_adjustable_cap(
+        generators: pd.DataFrame, 
+        buses: pd.DataFrame, 
+        adjustable_carriers: list[str] = ['hydropower']
+        ) -> pd.DataFrame:
     """
     Calculate the Grid Supply Contribution (GSK) based on adjustable energy capacity.
     
@@ -503,13 +507,12 @@ def gsk_adjustable_cap(generators: pd.DataFrame, buses: pd.DataFrame) -> pd.Data
         If no generators are found in one or more zones.
     """
     # Constants
-    ADJUSTABLE_CARRIERS = ['hydropower']
     ZONE_COLUMN = 'zone_name'
     BUS_COLUMN = 'bus'
     P_NOM_COLUMN = 'p_nom'
     
     # Filter generators for adjustable carriers and remove up and down regulators
-    adjustable_generators = generators[generators['carrier'].isin(ADJUSTABLE_CARRIERS)]
+    adjustable_generators = generators[generators['carrier'].isin(adjustable_carriers)]
     adjustable_generators = adjustable_generators[~(adjustable_generators.index.str.endswith('--rd_up') | adjustable_generators.index.str.endswith('--rd_dn'))]
     
     if len(adjustable_generators) == 0:
