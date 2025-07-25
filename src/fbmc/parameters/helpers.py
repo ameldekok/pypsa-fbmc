@@ -382,3 +382,16 @@ def suppress_warnings_and_info():
     warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
     logging.getLogger('pypsa.consistency').setLevel(logging.WARNING)
     return 
+
+def get_net_positions(buses: pd.DataFrame, buses_t: pd.DataFrame, zones: pd.Index) -> pd.DataFrame:
+    """Calculate net positions for each zone based on bus power values.
+    
+    Args:
+        buses: DataFrame containing bus data with zone_name column
+        buses_t: DataFrame containing time series bus power values
+        zones: Index of zone names to calculate positions for
+        
+    Returns:
+        DataFrame with net positions per zone
+    """
+    return buses_t.p.T.groupby(buses['zone_name']).sum().T.reindex(columns=zones, fill_value=0.0)
