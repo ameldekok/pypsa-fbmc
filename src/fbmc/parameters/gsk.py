@@ -363,10 +363,10 @@ def _run_fbmc_with_gsk(
             opt_loads_df = zonal_network.loads_t.p.copy()
 
             # Sum generator outputs by bus
-            gen_inj = opt_gens_df.groupby(perturbed_network.generators.bus, axis=1).sum()
+            gen_inj = opt_gens_df.T.groupby(perturbed_network.generators.bus).sum().T
             
             # Sum loads by bus (loads consumed are negative injections)
-            load_inj = opt_loads_df.groupby(perturbed_network.loads.bus, axis=1).sum()
+            load_inj = opt_loads_df.T.groupby(perturbed_network.loads.bus).sum().T
             
             # Align to all buses
             buses = perturbed_network.buses.index
@@ -399,13 +399,34 @@ def _check_gsk_convergence(
     current_gsk: Dict[pd.Timestamp, pd.DataFrame],
     tolerance: float = 0.01
 ) -> bool:
-    """Check if GSK has converged by comparing new and current values."""
-    # Simple implementation: check if maximum absolute difference is below tolerance
+    """Check if GSK has converged by comparing new and current values.
+
+    Prints the maximum absolute difference per timestamp and an overall summary
+    to help track convergence across iterations.
+    """
+    overall_max_diff = 0.0
+    converged = True
+
     for ts in new_gsk:
-        max_diff = abs(new_gsk[ts].values - current_gsk[ts].values).max()
+        try:
+            # Fast path matching existing behavior
+            max_diff = float(np.max(np.abs(new_gsk[ts].values - current_gsk[ts].values)))
+        except Exception:
+            # Safer path with alignment in case of ordering/shape issues
+            diff_df = (new_gsk[ts] - current_gsk[ts]).abs()
+            max_diff = float(np.nanmax(diff_df.to_numpy()))
+
+        overall_max_diff = max(overall_max_diff, max_diff)
+        print(f"GSK convergence check: ts={ts}, max abs diff={max_diff:.6f}, tolerance={tolerance}")
+
         if max_diff > tolerance:
-            return False
-    return True
+            converged = False
+
+    print(
+        f"GSK convergence summary: overall max abs diff={overall_max_diff:.6f}, "
+        f"tolerance={tolerance} -> {'converged' if converged else 'not converged'}"
+    )
+    return converged
 
 
 def gsk_adjustable_cap(generators: pd.DataFrame, buses: pd.DataFrame) -> pd.DataFrame:
