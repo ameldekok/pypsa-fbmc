@@ -32,3 +32,7 @@ class FBMCConfig:
 
     # Random seed for reproducibility
     base_seed: int = None
+
+    # Optional: perform a convergence check for uncertainty-based GSK by
+    # recomputing with double the scenarios and reporting max abs diffs
+    enable_uncertainty_convergence_check: bool = False

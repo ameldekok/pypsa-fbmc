@@ -163,6 +163,32 @@ def gsk_iterative_uncertainty(
     # Calculate the GSK based on the nodal injections difference
     processed_nodal_difference = calculate_gsk_per_bus(nodal_injections_difference, network)
 
+    # Optional convergence check: compare N vs 2N scenarios
+    if config is not None and getattr(config, 'enable_uncertainty_convergence_check', False):
+        # Reseed to reproduce the same first N draws, so 2N includes those plus extra
+        if hasattr(config, 'base_seed') and config.base_seed is not None:
+            np.random.seed(config.base_seed)
+        n2 = 2 * num_scenarios
+        nodal_injections_difference_2n = initialize_nodal_injection_difference(network, n2)
+        original_nodal_injections_2n = network.buses_t.p.copy()
+
+        for i in range(n2):
+            stochastic_network = network.copy(snapshots=network.snapshots)
+            introduce_variation_to_network(
+                stochastic_network,
+                uncertain_gens,
+                uncertain_loads,
+                gen_variation_std_dev,
+                load_variation_std_dev,
+            )
+            silent_run_opf(stochastic_network)
+            nodal_injections_difference_2n[i,:,:] = (stochastic_network.buses_t.p - original_nodal_injections_2n).values.T
+
+        gsk_2n = calculate_gsk_per_bus(nodal_injections_difference_2n, network)
+
+        print("Uncertainty-based GSK convergence check (N vs 2N scenarios):")
+        _check_gsk_convergence(gsk_2n, processed_nodal_difference, tolerance=(config.fbmc_iter_tolerance if hasattr(config, 'fbmc_iter_tolerance') else 0.01))
+
     # Process results and calculate GSK
     return processed_nodal_difference
 
