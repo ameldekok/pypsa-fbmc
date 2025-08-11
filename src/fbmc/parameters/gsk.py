@@ -59,6 +59,7 @@ def calculate_gsk(network: pypsa.Network,
             num_scenarios=config.num_scenarios,
             gen_variation_std_dev=config.gen_variation_std_dev,
             load_variation_std_dev=config.load_variation_std_dev,
+            config=config
         )
     elif config.gsk_method == "CURRENT_GENERATION":
         return gsk_current_generation(network.generators, network.generators_t.p, network.buses)
@@ -82,7 +83,8 @@ def gsk_iterative_uncertainty(
     uncertain_carriers: List[str] = ['offshore-wind', 'onshore-wind'],
     num_scenarios: int = 10,
     gen_variation_std_dev: float = 0.1,
-    load_variation_std_dev: float = 0.1
+    load_variation_std_dev: float = 0.1,
+    config: Optional[FBMCConfig] = None
 ) -> Dict[pd.Timestamp, pd.DataFrame]:
     """
     Calculate GSK using Monte Carlo simulation with uncertainty in generation and load.
@@ -116,6 +118,14 @@ def gsk_iterative_uncertainty(
         raise ValueError("Number of iterations must be at least 1")
     if gen_variation_std_dev < 0 or load_variation_std_dev < 0:
         raise ValueError("Standard deviations must be non-negative")
+
+
+    # Set up random generator from config.base_seed
+    if config is not None and hasattr(config, 'base_seed') and config.base_seed is not None:
+        rng = np.random.default_rng(config.base_seed)
+        np.random.seed(config.base_seed)  # For legacy code if needed
+    else:
+        rng = np.random.default_rng()
 
     # Run the network once to get initial generation and load values
     try:
@@ -218,7 +228,14 @@ def gsk_iterative_fbmc(
     # Main GSK iteration loop
     for gsk_iteration in range(max_gsk_iterations):
         print(f"Starting GSK iteration {gsk_iteration + 1}/{max_gsk_iterations}")
-        
+
+        # Set up random generator for this scenario refinement
+        if hasattr(config, 'base_seed') and config.base_seed is not None:
+            rng = np.random.default_rng(config.base_seed)
+            np.random.seed(config.base_seed)  # For legacy code if needed
+        else:
+            rng = np.random.default_rng()
+
         # Collect uncertain elements
         uncertain_gens, uncertain_loads = get_uncertain_elements(network, uncertain_carriers)
         
@@ -249,7 +266,7 @@ def gsk_iterative_fbmc(
         new_gsk = calculate_gsk_per_bus(nodal_difference_data, network)
         
         # Check for convergence
-        if _check_gsk_convergence(new_gsk, current_gsk):
+        if _check_gsk_convergence(new_gsk, current_gsk, tolerance=config.fbmc_iter_tolerance):
             print(f"GSK converged after {gsk_iteration + 1} iterations")
             break
             

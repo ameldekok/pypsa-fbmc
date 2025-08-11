@@ -26,3 +26,9 @@ class FBMCConfig:
     # Iterative GSK parameters
     max_gsk_iterations: int = 5
     initial_gsk_method: str = "CURRENT_GENERATION"
+
+    # Iterative FBMC parameters
+    fbmc_iter_tolerance: float = 0.01
+
+    # Random seed for reproducibility
+    base_seed: int = None
